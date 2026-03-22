@@ -769,8 +769,50 @@ function animate(): void {
     }
     barrelElevation = THREE.MathUtils.clamp((lo + hi) / 2, 0.05, 1.2);
 
-    // Прицел на земле
+    // Проверяем пролетит ли снаряд до цели или врежется в рельеф
     const ap = gameCam.aimPointWorld;
+    const fireAzCheck = gameCam.aimAzimuthRad;
+    let blocked = false;
+    {
+      // Мини-симуляция траектории с проверкой рельефа
+      const startX = howitzer.position.x * SCALE;
+      const startZ = howitzer.position.z * SCALE;
+      const startY = (howitzer.position.y + 3.5) * SCALE; // высота ствола
+      let sx = startX, sy = startY, sz = startZ;
+      let vxs = MUZZLE_VELOCITY * Math.cos(barrelElevation) * Math.sin(fireAzCheck);
+      let vys = MUZZLE_VELOCITY * Math.sin(barrelElevation);
+      let vzs = MUZZLE_VELOCITY * Math.cos(barrelElevation) * Math.cos(fireAzCheck);
+      const checkDt = 0.3;
+      for (let step = 0; step < 500; step++) {
+        const spd = Math.sqrt(vxs * vxs + vys * vys + vzs * vzs);
+        const drag = 0.5 * 1.225 * 0.15 * 0.018 * spd * spd / 43;
+        vxs -= drag * (vxs / (spd || 1)) * checkDt;
+        vys -= (9.81 + drag * (vys / (spd || 1))) * checkDt;
+        vzs -= drag * (vzs / (spd || 1)) * checkDt;
+        sx += vxs * checkDt;
+        sy += vys * checkDt;
+        sz += vzs * checkDt;
+        const scnX = sx / SCALE, scnZ = sz / SCALE, scnY = sy / SCALE;
+        const tH = getTerrainHeight(scnX, scnZ);
+        if (scnY <= tH) {
+          // Снаряд попал в рельеф — проверяем далеко ли от прицела
+          const dx = scnX - ap.x, dz = scnZ - ap.z;
+          const miss = Math.sqrt(dx * dx + dz * dz);
+          if (miss > 5) blocked = true; // далеко от цели — заблокирован
+          break;
+        }
+      }
+    }
+
+    // Цвет прицела: зелёный = чисто, красный = снаряд не долетит
+    const reticleColor = blocked ? 0xff0000 : 0x00ff00;
+    reticleGroup.traverse(c => {
+      if ((c as THREE.Mesh).isMesh) {
+        ((c as THREE.Mesh).material as THREE.MeshBasicMaterial).color.setHex(reticleColor);
+      }
+    });
+
+    // Прицел на земле
     reticleGroup.position.set(ap.x, getTerrainHeight(ap.x, ap.z) + 1.5, ap.z);
     reticleGroup.visible = true;
   } else {

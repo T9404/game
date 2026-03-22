@@ -54,8 +54,13 @@ export class GameCamera {
   setAiming(v: boolean): void {
     this.aiming = v;
     if (v) {
-      // Инициализируем точку прицеливания перед техникой
-      this.aimPoint.set(this.vehiclePos.x, 0, this.vehiclePos.z + 50);
+      // Точка прицеливания в направлении куда башня смотрела
+      const prevAz = this.azimuth + Math.PI;
+      this.aimPoint.set(
+        this.vehiclePos.x + Math.sin(prevAz) * 50,
+        0,
+        this.vehiclePos.z + Math.cos(prevAz) * 50
+      );
       this.topDownHeight = 200;
     } else {
       this.distance = 20;
