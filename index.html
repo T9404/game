@@ -43,6 +43,12 @@
       .target-item.marked { color: #ff0; }
       .target-item.active { color: #f00; }
       .highlight { color: #ff0; }
+      #minimap {
+        position: absolute; bottom: 60px; right: 20px;
+        border: 1px solid #0f0;
+        background: rgba(0,20,0,0.75);
+        pointer-events: none;
+      }
     </style>
   </head>
   <body>
@@ -61,6 +67,7 @@
         <div style="margin-bottom:8px; text-decoration:underline;">ЦЕЛИ</div>
         <div id="targets-list"></div>
       </div>
+      <canvas id="minimap" width="220" height="220"></canvas>
       <div id="mode-label">НАБЛЮДЕНИЕ [Tab — прицел] [WASD — движение]</div>
     </div>
     <script type="module" src="/src/main.ts"></script>

@@ -3,7 +3,7 @@ import GUI from 'lil-gui';
 import { GameCamera } from './camera';
 import { createHowitzer } from './howitzer';
 import { createTargets, updateTargets, type TargetData } from './targets';
-import { createProjectile, stepProjectile, type ProjectileState, type PhysicsParams } from './physics';
+import { createProjectile, stepProjectile, simulateRange, type ProjectileState, type PhysicsParams } from './physics';
 import { populateEnvironment } from './environment';
 
 // ===== КОНСТАНТЫ =====
@@ -27,6 +27,8 @@ scene.fog = new THREE.Fog(0xc8d8e8, 200, 900);
 // ===== КАМЕРА =====
 const gameCam = new GameCamera(window.innerWidth / window.innerHeight);
 gameCam.bindEvents(renderer.domElement);
+// Передадим функцию рельефа после её определения (ниже)
+// см. после определения getTerrainHeight
 
 // ===== СВЕТ =====
 const hemiLight = new THREE.HemisphereLight(0x88bbee, 0x445522, 0.6);
@@ -131,6 +133,7 @@ scene.add(ground);
 
 // ===== ОКРУЖЕНИЕ =====
 populateEnvironment(scene, getTerrainHeight);
+gameCam.setTerrainFunc(getTerrainHeight);
 
 // ===== ГАУБИЦА =====
 const howitzer = createHowitzer();
@@ -142,6 +145,40 @@ const targets = createTargets();
 for (const t of targets) {
   scene.add(t.mesh);
 }
+
+// ===== ПРИЦЕЛ НА ЗЕМЛЕ (арт-режим) =====
+const reticleGroup = new THREE.Group();
+// Кольцо
+const reticleRing = new THREE.Mesh(
+  new THREE.RingGeometry(3, 3.5, 32),
+  new THREE.MeshBasicMaterial({ color: 0x00ff00, side: THREE.DoubleSide, transparent: true, opacity: 0.7 })
+);
+reticleRing.rotation.x = -Math.PI / 2;
+reticleGroup.add(reticleRing);
+// Внутренний круг (зона поражения)
+const reticleInner = new THREE.Mesh(
+  new THREE.RingGeometry(0, 5, 32),
+  new THREE.MeshBasicMaterial({ color: 0x00ff00, side: THREE.DoubleSide, transparent: true, opacity: 0.08 })
+);
+reticleInner.rotation.x = -Math.PI / 2;
+reticleGroup.add(reticleInner);
+// Крестик
+for (let i = 0; i < 4; i++) {
+  const line = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.3, 4),
+    new THREE.MeshBasicMaterial({ color: 0x00ff00, side: THREE.DoubleSide, transparent: true, opacity: 0.6 })
+  );
+  line.rotation.x = -Math.PI / 2;
+  line.rotation.z = (Math.PI / 2) * i;
+  line.position.y = 0.05;
+  // Сдвиг от центра
+  const offset = 5.5;
+  line.position.x = Math.sin((Math.PI / 2) * i) * offset;
+  line.position.z = Math.cos((Math.PI / 2) * i) * offset;
+  reticleGroup.add(line);
+}
+reticleGroup.visible = false;
+scene.add(reticleGroup);
 
 // ===== HUD =====
 let aimMode = false;
@@ -157,6 +194,191 @@ raycaster.far = 100000;
 const screenCenter = new THREE.Vector2(0, 0);
 
 let selectedTarget: TargetData | null = null;
+
+// ===== МИНИКАРТА =====
+const minimapCanvas = document.getElementById('minimap') as HTMLCanvasElement;
+const mmCtx = minimapCanvas.getContext('2d')!;
+const MM = 220;
+const MM_RANGE = 600; // scene units от центра
+
+function drawMinimap(): void {
+  const cx = MM / 2;
+  const cy = MM / 2;
+  const hx = howitzer.position.x;
+  const hz = howitzer.position.z;
+
+  // Конвертация мировых координат → пиксели миникарты
+  // Canvas Y идёт вниз, world Z идёт "вперёд" → инвертируем Z
+  const toX = (wx: number) => cx + (wx - hx) / MM_RANGE * cx;
+  const toY = (wz: number) => cy - (wz - hz) / MM_RANGE * cy;
+
+  // Очистка
+  mmCtx.clearRect(0, 0, MM, MM);
+
+  // Сетка (каждые 100 units = 10км)
+  mmCtx.strokeStyle = 'rgba(0,255,0,0.1)';
+  mmCtx.lineWidth = 0.5;
+  const gridStep = 100;
+  const gridStart = Math.floor((hx - MM_RANGE) / gridStep) * gridStep;
+  const gridEndX = hx + MM_RANGE;
+  const gridStartZ = Math.floor((hz - MM_RANGE) / gridStep) * gridStep;
+  const gridEndZ = hz + MM_RANGE;
+  mmCtx.beginPath();
+  for (let gx = gridStart; gx <= gridEndX; gx += gridStep) {
+    const px = toX(gx);
+    mmCtx.moveTo(px, 0);
+    mmCtx.lineTo(px, MM);
+  }
+  for (let gz = gridStartZ; gz <= gridEndZ; gz += gridStep) {
+    const py = toY(gz);
+    mmCtx.moveTo(0, py);
+    mmCtx.lineTo(MM, py);
+  }
+  mmCtx.stroke();
+
+  // Граница карты (±1000 scene units)
+  mmCtx.strokeStyle = 'rgba(0,255,0,0.3)';
+  mmCtx.lineWidth = 1;
+  const bx1 = toX(-1000), by1 = toY(-1000);
+  const bx2 = toX(1000), by2 = toY(1000);
+  mmCtx.strokeRect(Math.min(bx1, bx2), Math.min(by1, by2), Math.abs(bx2 - bx1), Math.abs(by2 - by1));
+
+  // Круг максимальной дальности (V²/g без drag — приблизительная макс. дальность)
+  const maxRangeMeters = (MUZZLE_VELOCITY * MUZZLE_VELOCITY) / 9.81 * 0.7; // с учётом drag ~70%
+  const maxRangeScene = maxRangeMeters / SCALE;
+  const maxRangePx = maxRangeScene / MM_RANGE * cx;
+  mmCtx.strokeStyle = 'rgba(255,100,0,0.3)';
+  mmCtx.lineWidth = 1;
+  mmCtx.setLineDash([4, 4]);
+  mmCtx.beginPath();
+  mmCtx.arc(cx, cy, maxRangePx, 0, Math.PI * 2);
+  mmCtx.stroke();
+  mmCtx.setLineDash([]);
+
+  // Подпись дальности
+  mmCtx.fillStyle = 'rgba(255,140,0,0.5)';
+  mmCtx.font = '8px Courier New';
+  mmCtx.textAlign = 'center';
+  mmCtx.fillText(`${(maxRangeMeters / 1000).toFixed(0)}км`, cx + maxRangePx - 14, cy - 3);
+
+  // Конус прицеливания (WoT arty style)
+  const fireAz = gameCam.aimAzimuthRad;
+  const coneLen = 80; // пикселей
+  const coneHalf = 0.08; // ~4.5°
+  // На canvas: угол 0 = вправо, world az 0 = +Z = вверх на canvas = -PI/2
+  const drawAngle = -fireAz + Math.PI / 2;
+  mmCtx.fillStyle = 'rgba(0,255,0,0.12)';
+  mmCtx.strokeStyle = 'rgba(0,255,0,0.4)';
+  mmCtx.lineWidth = 1;
+  mmCtx.beginPath();
+  mmCtx.moveTo(cx, cy);
+  mmCtx.lineTo(
+    cx + Math.cos(drawAngle - coneHalf) * coneLen,
+    cy - Math.sin(drawAngle - coneHalf) * coneLen
+  );
+  mmCtx.lineTo(
+    cx + Math.cos(drawAngle + coneHalf) * coneLen,
+    cy - Math.sin(drawAngle + coneHalf) * coneLen
+  );
+  mmCtx.closePath();
+  mmCtx.fill();
+  mmCtx.stroke();
+
+  // Линия прицела (центр конуса)
+  mmCtx.strokeStyle = 'rgba(0,255,0,0.5)';
+  mmCtx.lineWidth = 1;
+  mmCtx.beginPath();
+  mmCtx.moveTo(cx, cy);
+  mmCtx.lineTo(
+    cx + Math.cos(drawAngle) * coneLen,
+    cy - Math.sin(drawAngle) * coneLen
+  );
+  mmCtx.stroke();
+
+  // Цели
+  mmCtx.font = '9px Courier New';
+  mmCtx.textAlign = 'left';
+  for (const t of targets) {
+    const tx = toX(t.mesh.position.x);
+    const ty = toY(t.mesh.position.z);
+    // Если за пределами canvas — пропустить
+    if (tx < -10 || tx > MM + 10 || ty < -10 || ty > MM + 10) continue;
+
+    mmCtx.beginPath();
+    mmCtx.arc(tx, ty, 4, 0, Math.PI * 2);
+    if (t.destroyed) {
+      mmCtx.fillStyle = '#555';
+    } else if (t.marked) {
+      mmCtx.fillStyle = '#ff0';
+    } else {
+      mmCtx.fillStyle = '#f00';
+    }
+    mmCtx.fill();
+
+    // ID
+    if (!t.destroyed) {
+      mmCtx.fillStyle = mmCtx.fillStyle;
+      mmCtx.fillText(`${t.id}`, tx + 6, ty + 3);
+    }
+  }
+
+  // Воронки (кратеры) — оранжевые кольца, затухают за 30с
+  const now = Date.now();
+  for (let i = impactMarks.length - 1; i >= 0; i--) {
+    const mark = impactMarks[i];
+    const age = (now - mark.time) / 1000;
+    if (age > 30) { impactMarks.splice(i, 1); continue; }
+    const mx = toX(mark.x);
+    const my = toY(mark.z);
+    if (mx < -10 || mx > MM + 10 || my < -10 || my > MM + 10) continue;
+    const alpha = Math.max(0, 1 - age / 30);
+    mmCtx.strokeStyle = `rgba(255,140,0,${(alpha * 0.8).toFixed(2)})`;
+    mmCtx.lineWidth = 1.5;
+    mmCtx.beginPath();
+    mmCtx.arc(mx, my, 3, 0, Math.PI * 2);
+    mmCtx.stroke();
+    // Крестик
+    mmCtx.strokeStyle = `rgba(255,80,0,${(alpha * 0.6).toFixed(2)})`;
+    mmCtx.lineWidth = 1;
+    mmCtx.beginPath();
+    mmCtx.moveTo(mx - 2, my - 2); mmCtx.lineTo(mx + 2, my + 2);
+    mmCtx.moveTo(mx + 2, my - 2); mmCtx.lineTo(mx - 2, my + 2);
+    mmCtx.stroke();
+  }
+
+  // Летящие снаряды — яркие оранжевые точки
+  for (const p of activeProjectiles) {
+    if (!p.state.alive) continue;
+    const px = toX(p.state.position.x / SCALE);
+    const py = toY(p.state.position.z / SCALE);
+    if (px < -10 || px > MM + 10 || py < -10 || py > MM + 10) continue;
+    mmCtx.fillStyle = '#ff4400';
+    mmCtx.beginPath();
+    mmCtx.arc(px, py, 2.5, 0, Math.PI * 2);
+    mmCtx.fill();
+    // Свечение
+    mmCtx.fillStyle = 'rgba(255,100,0,0.3)';
+    mmCtx.beginPath();
+    mmCtx.arc(px, py, 5, 0, Math.PI * 2);
+    mmCtx.fill();
+  }
+
+  // Игрок (треугольник по направлению движения)
+  const headingDraw = -vehicleHeading + Math.PI / 2;
+  const ps = 6; // размер
+  mmCtx.fillStyle = '#0f0';
+  mmCtx.beginPath();
+  mmCtx.moveTo(cx + Math.cos(headingDraw) * ps, cy - Math.sin(headingDraw) * ps);
+  mmCtx.lineTo(cx + Math.cos(headingDraw + 2.5) * ps * 0.7, cy - Math.sin(headingDraw + 2.5) * ps * 0.7);
+  mmCtx.lineTo(cx + Math.cos(headingDraw - 2.5) * ps * 0.7, cy - Math.sin(headingDraw - 2.5) * ps * 0.7);
+  mmCtx.closePath();
+  mmCtx.fill();
+
+  // Рамка
+  mmCtx.strokeStyle = 'rgba(0,255,0,0.5)';
+  mmCtx.lineWidth = 1;
+  mmCtx.strokeRect(0, 0, MM, MM);
+}
 
 // ===== БАШНЯ И СТВОЛ =====
 const turretGroup = howitzer.userData.turret as THREE.Group;
@@ -208,20 +430,19 @@ function updateVehicle(dt: number): void {
   }
 }
 
-// Scroll в прицельном режиме — угол ствола (перехватываем до камеры)
+// Scroll в прицельном режиме — высота камеры (перехватываем до камеры)
 renderer.domElement.addEventListener('wheel', (e) => {
   if (aimMode) {
     e.preventDefault();
     e.stopImmediatePropagation();
-    barrelElevation += e.deltaY * -0.003;
-    barrelElevation = THREE.MathUtils.clamp(barrelElevation, 0.05, 1.2); // ~3° — ~69°
+    gameCam.adjustTopDownHeight(e.deltaY);
   }
 }, { capture: true });
 
 // ===== СНАРЯДЫ =====
 const MUZZLE_VELOCITY = 940; // м/с (2С35)
-const PROJECTILE_SIM_SPEED = 20; // ускорение симуляции
-const PHYSICS_DT = 0.05; // шаг физики (с)
+const PROJECTILE_SIM_SPEED = 200; // шагов физики за кадр
+const PHYSICS_DT = 0.02; // шаг физики (с) — мелкий чтобы не пролетал землю
 
 interface ActiveProjectile {
   state: ProjectileState;
@@ -232,10 +453,11 @@ interface ActiveProjectile {
 }
 
 const activeProjectiles: ActiveProjectile[] = [];
+const impactMarks: { x: number; z: number; time: number }[] = [];
 
 function fireProjectile(): void {
   // Азимут стрельбы = направление взгляда камеры (противоположно орбите)
-  const fireAz = gameCam.azimuthRad + Math.PI;
+  const fireAz = gameCam.aimAzimuthRad;
   const fireEl = barrelElevation;
 
   const params: PhysicsParams = {
@@ -331,8 +553,20 @@ function updateProjectiles(): void {
     for (let s = 0; s < PROJECTILE_SIM_SPEED; s++) {
       stepProjectile(p.state, PHYSICS_DT, p.params);
 
-      // Добавляем точку следа (каждые 4 шага)
-      if (s % 4 === 0) {
+      // Проверка столкновения с рельефом (не только y<0)
+      if (p.state.alive) {
+        const scX = p.state.position.x / SCALE;
+        const scZ = p.state.position.z / SCALE;
+        const scY = p.state.position.y / SCALE;
+        const terrainY = getTerrainHeight(scX, scZ);
+        if (scY <= terrainY) {
+          p.state.position.y = terrainY * SCALE;
+          p.state.alive = false;
+        }
+      }
+
+      // Добавляем точку следа (каждые 20 шагов)
+      if (s % 20 === 0) {
         p.trailPositions.push(
           p.state.position.x / SCALE,
           p.state.position.y / SCALE,
@@ -365,6 +599,9 @@ function updateProjectiles(): void {
         crater.position.copy(impactPos);
         crater.position.y = 0.02;
         scene.add(crater);
+
+        // Запоминаем для миникарты
+        impactMarks.push({ x: impactPos.x, z: impactPos.z, time: Date.now() });
 
         break;
       }
@@ -434,16 +671,16 @@ renderer.domElement.addEventListener('click', () => {
 window.addEventListener('keydown', (e) => {
   keys[e.code] = true;
 
-  if (e.code === 'Space' && aimMode && activeProjectiles.length === 0) {
+  if (e.code === 'Space') {
     e.preventDefault();
     fireProjectile();
   }
   if (e.key === 'Tab') {
     e.preventDefault();
     aimMode = !aimMode;
-    crosshair.style.display = aimMode ? 'block' : 'none';
+    crosshair.style.display = 'none'; // В арт-режиме прицел на миникарте
     modeLabel.textContent = aimMode
-      ? 'ПРИЦЕЛИВАНИЕ [Tab — обзор] [Клик — отметить] [Scroll — угол] [Пробел — огонь]'
+      ? 'АРТ-РЕЖИМ [Tab — обзор] [Мышь — прицел] [Scroll — высота] [Пробел — огонь]'
       : 'НАБЛЮДЕНИЕ [Tab — прицел] [WASD — движение]';
     gameCam.setAiming(aimMode);
   }
@@ -484,8 +721,35 @@ function animate(): void {
   updateTargets(targets, dt, SCALE);
   updateProjectiles();
 
+  // В арт-режиме: бинарный поиск угла ствола через мини-симуляцию с drag
+  if (aimMode) {
+    const distMeters = gameCam.aimDistance * SCALE;
+    const simParams: PhysicsParams = {
+      muzzleVelocity: MUZZLE_VELOCITY,
+      elevationRad: 0, azimuthRad: 0,
+      windSpeed: debugParams.windSpeed,
+      windDirectionRad: THREE.MathUtils.degToRad(debugParams.windDir),
+      humidity: debugParams.humidity / 100,
+    };
+    // Бинарный поиск: 10 итераций достаточно для точности ~0.001 рад
+    let lo = 0.01, hi = 1.3;
+    for (let i = 0; i < 12; i++) {
+      const mid = (lo + hi) / 2;
+      const range = simulateRange(mid, simParams);
+      if (range < distMeters) lo = mid; else hi = mid;
+    }
+    barrelElevation = THREE.MathUtils.clamp((lo + hi) / 2, 0.05, 1.2);
+
+    // Прицел на земле
+    const ap = gameCam.aimPointWorld;
+    reticleGroup.position.set(ap.x, getTerrainHeight(ap.x, ap.z) + 1.5, ap.z);
+    reticleGroup.visible = true;
+  } else {
+    reticleGroup.visible = false;
+  }
+
   // Синхронизация башни и ствола с прицелом (относительно корпуса)
-  turretGroup.rotation.y = gameCam.azimuthRad + Math.PI - vehicleHeading;
+  turretGroup.rotation.y = gameCam.aimAzimuthRad - vehicleHeading;
   barrelGroup.rotation.x = -barrelElevation;
 
   for (const t of targets) {
@@ -501,12 +765,15 @@ function animate(): void {
 
   // HUD обновление
   // Азимут стрельбы (куда смотрит башня)
-  const fireAzDeg = THREE.MathUtils.radToDeg(gameCam.azimuthRad + Math.PI) % 360;
+  const fireAzDeg = THREE.MathUtils.radToDeg(gameCam.aimAzimuthRad) % 360;
   azimuthEl.textContent = (fireAzDeg < 0 ? fireAzDeg + 360 : fireAzDeg).toFixed(1) + '°';
   elevationEl.textContent = THREE.MathUtils.radToDeg(barrelElevation).toFixed(1) + '°';
   speedEl.textContent = (Math.abs(vehicleSpeed) / MAX_SPEED * 100).toFixed(0);
 
-  if (selectedTarget) {
+  if (aimMode) {
+    const aimDist = gameCam.aimDistance * SCALE;
+    distanceInfo.textContent = `Дист. прицела: ${(aimDist / 1000).toFixed(1)} км`;
+  } else if (selectedTarget) {
     const d = howitzer.position.distanceTo(selectedTarget.mesh.position) * SCALE;
     distanceInfo.textContent = `До цели: ${(d / 1000).toFixed(1)} км`;
   } else {
@@ -523,6 +790,7 @@ function animate(): void {
       : 'rgba(0,255,0,0.6)';
   }
 
+  drawMinimap();
   renderer.render(scene, gameCam.camera);
 }
 

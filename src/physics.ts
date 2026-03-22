@@ -39,7 +39,7 @@ export function stepProjectile(state: ProjectileState, dt: number, params: Physi
   if (!state.alive) return;
 
   const rho = params.airDensity ?? 1.225;
-  const cd = params.dragCoeff ?? 0.3;
+  const cd = params.dragCoeff ?? 0.15;
   const mass = params.projectileMass ?? 43;    // 152мм снаряд ~43кг
   const area = params.projectileArea ?? 0.018; // π*(0.076)²
 
@@ -81,4 +81,41 @@ export function stepProjectile(state: ProjectileState, dt: number, params: Physi
     state.position.y = 0;
     state.alive = false;
   }
+}
+
+/**
+ * Быстрая симуляция: возвращает горизонтальную дальность (в метрах)
+ * для заданного угла возвышения. Используется для бинарного поиска угла.
+ */
+export function simulateRange(elevationRad: number, params: PhysicsParams): number {
+  const dt = 0.5; // грубый шаг — достаточно для оценки
+  const vx = params.muzzleVelocity * Math.cos(elevationRad);
+  let vy = params.muzzleVelocity * Math.sin(elevationRad);
+  let y = 400; // стартовая высота ~400м (ствол)
+  let hDist = 0;
+
+  const rho = params.airDensity ?? 1.225;
+  const cd = params.dragCoeff ?? 0.15;
+  const mass = params.projectileMass ?? 43;
+  const area = params.projectileArea ?? 0.018;
+  const humFactor = 1 - params.humidity * 0.02;
+  const effRho = rho * humFactor;
+
+  let vHoriz = vx;
+
+  for (let i = 0; i < 2000; i++) {
+    const speed = Math.sqrt(vHoriz * vHoriz + vy * vy);
+    const drag = 0.5 * effRho * cd * area * speed * speed;
+    const dragH = (drag / mass) * (vHoriz / (speed || 1));
+    const dragV = (drag / mass) * (vy / (speed || 1));
+
+    vHoriz -= dragH * dt;
+    vy -= (GRAVITY + dragV) * dt;
+
+    hDist += vHoriz * dt;
+    y += vy * dt;
+
+    if (y < 0) break;
+  }
+  return hDist;
 }
