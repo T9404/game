@@ -143,6 +143,8 @@ scene.add(howitzer);
 // ===== ЦЕЛИ =====
 const targets = createTargets();
 for (const t of targets) {
+  // Ставим цель на высоту рельефа
+  t.mesh.position.y = getTerrainHeight(t.mesh.position.x, t.mesh.position.z);
   scene.add(t.mesh);
 }
 
@@ -747,7 +749,7 @@ function animate(): void {
   updateVehicle(dt);
   gameCam.setTarget(howitzer.position);
 
-  updateTargets(targets, dt, SCALE);
+  updateTargets(targets, dt, SCALE, getTerrainHeight);
   updateProjectiles();
 
   // В арт-режиме: бинарный поиск угла ствола через мини-симуляцию с drag

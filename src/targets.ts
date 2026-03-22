@@ -269,7 +269,10 @@ export function createTargets(): TargetData[] {
   return targets;
 }
 
-export function updateTargets(targets: TargetData[], dt: number, scale: number): void {
+export function updateTargets(
+  targets: TargetData[], dt: number, scale: number,
+  getHeight?: (x: number, z: number) => number
+): void {
   for (const t of targets) {
     if (t.destroyed) continue;
 
@@ -277,6 +280,10 @@ export function updateTargets(targets: TargetData[], dt: number, scale: number):
     if (t.speed > 0) {
       t.mesh.position.x += (t.direction.x * t.speed * dt) / scale;
       t.mesh.position.z += (t.direction.z * t.speed * dt) / scale;
+    }
+    // Ставим на рельеф
+    if (getHeight) {
+      t.mesh.position.y = getHeight(t.mesh.position.x, t.mesh.position.z);
     }
 
     // Вращаем и пульсируем маркер (для всех целей)
