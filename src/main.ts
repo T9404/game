@@ -580,24 +580,53 @@ function updateProjectiles(): void {
         // Снаряд упал — проверяем попадание и создаём взрыв на земле
         checkHit(p.state.position);
 
-        const impactPos = new THREE.Vector3(
-          p.state.position.x / SCALE,
-          0.5,
-          p.state.position.z / SCALE
-        );
-        const impactLight = new THREE.PointLight(0xff2200, 80, 40);
-        impactLight.position.copy(impactPos);
-        scene.add(impactLight);
-        setTimeout(() => scene.remove(impactLight), 600);
+        const impSceneX = p.state.position.x / SCALE;
+        const impSceneZ = p.state.position.z / SCALE;
+        const impTerrainY = getTerrainHeight(impSceneX, impSceneZ);
 
-        // Кратер (визуальный)
+        // Взрыв (свет + частицы) НА поверхности рельефа
+        const impactPos = new THREE.Vector3(impSceneX, impTerrainY + 0.5, impSceneZ);
+
+        const impactLight = new THREE.PointLight(0xff2200, 120, 60);
+        impactLight.position.copy(impactPos);
+        impactLight.position.y += 2;
+        scene.add(impactLight);
+        setTimeout(() => scene.remove(impactLight), 800);
+
+        // Огненная сфера взрыва (видна сверху)
+        const fireball = new THREE.Mesh(
+          new THREE.SphereGeometry(3, 12, 12),
+          new THREE.MeshBasicMaterial({ color: 0xff4400, transparent: true, opacity: 0.7 })
+        );
+        fireball.position.copy(impactPos);
+        fireball.position.y += 1.5;
+        scene.add(fireball);
+        // Анимация затухания
+        let fbLife = 0;
+        const fbInterval = setInterval(() => {
+          fbLife += 0.05;
+          fireball.scale.setScalar(1 + fbLife * 2);
+          (fireball.material as THREE.MeshBasicMaterial).opacity = 0.7 * (1 - fbLife);
+          if (fbLife >= 1) { scene.remove(fireball); clearInterval(fbInterval); }
+        }, 50);
+
+        // Столб дыма (виден издалека сверху)
+        const smoke = new THREE.Mesh(
+          new THREE.CylinderGeometry(1.5, 3, 15, 8),
+          new THREE.MeshBasicMaterial({ color: 0x444444, transparent: true, opacity: 0.3 })
+        );
+        smoke.position.copy(impactPos);
+        smoke.position.y += 8;
+        scene.add(smoke);
+        setTimeout(() => scene.remove(smoke), 3000);
+
+        // Кратер НА рельефе
         const crater = new THREE.Mesh(
           new THREE.RingGeometry(0.5, 3, 16),
           new THREE.MeshBasicMaterial({ color: 0x332200, side: THREE.DoubleSide })
         );
         crater.rotation.x = -Math.PI / 2;
-        crater.position.copy(impactPos);
-        crater.position.y = 0.02;
+        crater.position.set(impSceneX, impTerrainY + 0.05, impSceneZ);
         scene.add(crater);
 
         // Запоминаем для миникарты
