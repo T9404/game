@@ -5,70 +5,340 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>2С35 Коалиция-СВ</title>
     <style>
+      :root {
+        --cp-cyan: #00f0ff;
+        --cp-cyan-dim: rgba(0, 240, 255, 0.15);
+        --cp-cyan-glow: rgba(0, 240, 255, 0.4);
+        --cp-magenta: #ff00aa;
+        --cp-amber: #ffd700;
+        --cp-red: #ff0040;
+        --cp-green: #00ff88;
+        --cp-bg: rgba(5, 10, 25, 0.82);
+        --cp-bg-solid: rgba(5, 10, 25, 0.92);
+        --cp-border: rgba(0, 240, 255, 0.35);
+        --cp-text: #c8e6ff;
+        --cp-text-dim: rgba(200, 230, 255, 0.45);
+        --cp-font: 'Courier New', 'Consolas', monospace;
+        --cp-clip: polygon(0 0, calc(100% - 12px) 0, 100% 12px, 100% 100%, 12px 100%, 0 calc(100% - 12px));
+      }
+
       * { margin: 0; padding: 0; box-sizing: border-box; }
       body { overflow: hidden; background: #000; }
       canvas { display: block; }
+
+      /* ═══ HUD контейнер ═══ */
       #hud {
         position: absolute; top: 0; left: 0; width: 100%; height: 100%;
-        pointer-events: none; font-family: 'Courier New', monospace; color: #0f0;
+        pointer-events: none;
+        font-family: var(--cp-font);
+        color: var(--cp-text);
+        font-size: 12px;
+        line-height: 1.6;
       }
+
+      /* ═══ Сканлайны ═══ */
+      #scanlines {
+        position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+        pointer-events: none;
+        background: repeating-linear-gradient(
+          0deg,
+          transparent,
+          transparent 2px,
+          rgba(0, 240, 255, 0.015) 2px,
+          rgba(0, 240, 255, 0.015) 3px
+        );
+        z-index: 100;
+      }
+      #scanlines::after {
+        content: '';
+        position: absolute;
+        left: 0; width: 100%; height: 60px;
+        background: linear-gradient(
+          180deg,
+          transparent 0%,
+          rgba(0, 240, 255, 0.03) 40%,
+          rgba(0, 240, 255, 0.03) 60%,
+          transparent 100%
+        );
+        animation: scan-sweep 8s linear infinite;
+      }
+      @keyframes scan-sweep {
+        0%   { top: -10%; }
+        100% { top: 110%; }
+      }
+
+      /* ═══ Базовая панель ═══ */
+      .cp-panel {
+        background: var(--cp-bg);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        border: 1px solid var(--cp-border);
+        clip-path: var(--cp-clip);
+        box-shadow:
+          0 0 15px rgba(0, 240, 255, 0.06),
+          inset 0 0 30px rgba(0, 240, 255, 0.02);
+        padding: 14px 16px;
+      }
+
+      /* ═══ Заголовок панели ═══ */
+      .cp-header {
+        border-bottom: 1px solid rgba(0, 240, 255, 0.2);
+        padding-bottom: 6px;
+        margin-bottom: 8px;
+        font-size: 10px;
+        font-weight: bold;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+        color: var(--cp-cyan);
+      }
+      .cp-header::before {
+        content: '// ';
+        opacity: 0.4;
+      }
+
+      /* ═══ Утилитарные классы ═══ */
+      .cp-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        padding: 1px 0;
+      }
+      .cp-label {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        color: var(--cp-text-dim);
+      }
+      .cp-value {
+        color: var(--cp-cyan);
+        text-shadow: 0 0 6px rgba(0, 240, 255, 0.3);
+      }
+      .cp-divider {
+        height: 1px;
+        margin: 6px 0;
+        background: linear-gradient(90deg, transparent, var(--cp-border), transparent);
+      }
+      .cp-warn { color: var(--cp-red); }
+      .cp-amber { color: var(--cp-amber); text-shadow: 0 0 6px rgba(255, 215, 0, 0.3); }
+      .cp-green { color: var(--cp-green); text-shadow: 0 0 6px rgba(0, 255, 136, 0.3); }
+
+      /* ═══ Прицел ═══ */
       #crosshair {
         position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
-        width: 30px; height: 30px; border: 2px solid rgba(0,255,0,0.6); border-radius: 50%;
+        width: 32px; height: 32px;
+        border: 1px solid var(--cp-cyan);
+        border-radius: 50%;
         display: none;
+        box-shadow: 0 0 12px var(--cp-cyan-dim), inset 0 0 12px var(--cp-cyan-dim);
+        transition: left 0.05s, top 0.05s;
       }
       #crosshair::before, #crosshair::after {
-        content: ''; position: absolute; background: rgba(0,255,0,0.6);
+        content: ''; position: absolute; background: var(--cp-cyan); opacity: 0.6;
       }
       #crosshair::before { width: 1px; height: 100%; left: 50%; top: 0; }
       #crosshair::after { height: 1px; width: 100%; top: 50%; left: 0; }
+
+      /* ═══ Инфо-панель (характеристики) — top-left ═══ */
       #info-panel {
         position: absolute; top: 20px; left: 20px;
-        background: rgba(0,20,0,0.7); border: 1px solid #0f0;
-        padding: 15px; font-size: 14px; line-height: 1.8;
-        min-width: 280px;
-      }
-      #target-panel {
-        position: absolute; top: 20px; right: 20px;
-        background: rgba(0,20,0,0.7); border: 1px solid #0f0;
-        padding: 15px; font-size: 13px; line-height: 1.6;
         min-width: 260px;
       }
+
+      /* ═══ Панель целей — top-right ═══ */
+      #target-panel {
+        position: absolute; top: 20px; right: 20px;
+        min-width: 250px;
+        max-height: 50vh;
+        overflow-y: auto;
+      }
+
+      /* ═══ Стили целей ═══ */
+      .target-item {
+        padding: 6px 8px;
+        margin-bottom: 4px;
+        border-left: 2px solid var(--cp-cyan);
+        background: rgba(0, 240, 255, 0.03);
+        font-size: 11px;
+      }
+      .target-item.marked {
+        border-left-color: var(--cp-amber);
+        background: rgba(255, 215, 0, 0.05);
+        color: var(--cp-amber);
+      }
+      .target-item.active {
+        border-left-color: var(--cp-red);
+        background: rgba(255, 0, 64, 0.05);
+        color: var(--cp-red);
+      }
+      .target-item.destroyed {
+        border-left-color: rgba(200, 230, 255, 0.15);
+        background: rgba(200, 230, 255, 0.02);
+        color: var(--cp-text-dim);
+        text-decoration: line-through;
+      }
+      .target-item .t-name { font-weight: bold; }
+      .target-item .t-status { font-size: 10px; opacity: 0.7; }
+
+      /* ═══ Панель погоды — bottom-left ═══ */
+      #weather-panel {
+        position: absolute; bottom: 20px; left: 20px;
+        min-width: 200px;
+      }
+
+      /* ═══ Обёртка миникарты — bottom-right ═══ */
+      #minimap-wrapper {
+        position: absolute; bottom: 20px; right: 20px;
+        padding: 8px;
+      }
+      #minimap {
+        display: block;
+        border: none;
+        background: transparent;
+      }
+
+      /* ═══ Панель отладки — top-center ═══ */
+      #debug-panel {
+        position: absolute; top: 20px; left: 50%; transform: translateX(-50%);
+        min-width: 280px;
+        pointer-events: auto;
+      }
+      .dbg-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        margin-bottom: 4px;
+      }
+      .dbg-row .cp-label { min-width: 80px; }
+      .dbg-row .cp-value { min-width: 50px; text-align: right; font-size: 11px; }
+
+      /* ═══ Кастомные слайдеры ═══ */
+      .cp-slider {
+        -webkit-appearance: none;
+        appearance: none;
+        flex: 1;
+        height: 4px;
+        background: rgba(0, 240, 255, 0.12);
+        border-radius: 0;
+        outline: none;
+        cursor: pointer;
+      }
+      .cp-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 12px; height: 12px;
+        background: var(--cp-cyan);
+        clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+        cursor: pointer;
+        box-shadow: 0 0 6px var(--cp-cyan-glow);
+      }
+      .cp-slider::-moz-range-thumb {
+        width: 12px; height: 12px;
+        background: var(--cp-cyan);
+        clip-path: polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%);
+        border: none;
+        cursor: pointer;
+      }
+      .cp-slider::-webkit-slider-runnable-track {
+        height: 4px;
+        background: rgba(0, 240, 255, 0.12);
+      }
+
+      /* ═══ Mode label — bottom-center ═══ */
       #mode-label {
         position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
-        background: rgba(0,20,0,0.8); border: 1px solid #0f0;
-        padding: 8px 20px; font-size: 16px; pointer-events: auto;
+        background: var(--cp-bg);
+        backdrop-filter: blur(8px);
+        -webkit-backdrop-filter: blur(8px);
+        border: 1px solid var(--cp-border);
+        padding: 8px 24px;
+        font-size: 12px;
+        letter-spacing: 1px;
+        color: var(--cp-cyan);
+        pointer-events: auto;
+        animation: glow-pulse 4s ease-in-out infinite;
+        white-space: nowrap;
       }
-      .target-item { margin-bottom: 8px; padding: 4px 0; border-bottom: 1px solid rgba(0,255,0,0.2); }
-      .target-item.marked { color: #ff0; }
-      .target-item.active { color: #f00; }
-      .highlight { color: #ff0; }
-      #minimap {
-        position: absolute; bottom: 60px; right: 20px;
-        border: 1px solid #0f0;
-        background: rgba(0,20,0,0.75);
-        pointer-events: none;
+      @keyframes glow-pulse {
+        0%, 100% { box-shadow: 0 0 10px rgba(0, 240, 255, 0.1); }
+        50%      { box-shadow: 0 0 20px rgba(0, 240, 255, 0.2); }
+      }
+
+      /* ═══ Анимации ═══ */
+      @keyframes corner-pulse {
+        0%, 100% { opacity: 0.4; }
+        50%      { opacity: 1; }
       }
     </style>
   </head>
   <body>
     <div id="hud">
+      <!-- Сканлайны -->
+      <div id="scanlines"></div>
+
+      <!-- Прицел -->
       <div id="crosshair"></div>
-      <div id="info-panel">
-        <div>ГАУБИЦА: 2С35 «Коалиция-СВ»</div>
-        <div>Ветер: <span id="wind-info">2 м/с ←</span></div>
-        <div>Влажность: <span id="humidity-info">70%</span></div>
-        <div>Азимут: <span id="azimuth">0°</span></div>
-        <div>Угол: <span id="elevation">0°</span></div>
-        <div>Скорость: <span id="speed-info">0</span>%</div>
-        <div id="distance-info"></div>
+
+      <!-- ═══ ХАРАКТЕРИСТИКИ (top-left) ═══ -->
+      <div id="info-panel" class="cp-panel">
+        <div class="cp-header">Характеристики</div>
+        <div style="font-size:11px; color:var(--cp-cyan); margin-bottom:6px;">2С35 &laquo;Коалиция-СВ&raquo;</div>
+        <div class="cp-divider"></div>
+        <div class="cp-row"><span class="cp-label">Калибр</span><span class="cp-value">152мм</span></div>
+        <div class="cp-row"><span class="cp-label">Нач. скор.</span><span class="cp-value">940 м/с</span></div>
+        <div class="cp-divider"></div>
+        <div class="cp-row"><span class="cp-label">Азимут</span><span class="cp-value" id="azimuth">0&deg;</span></div>
+        <div class="cp-row"><span class="cp-label">Угол</span><span class="cp-value" id="elevation">0&deg;</span></div>
+        <div class="cp-row"><span class="cp-label">Скорость</span><span class="cp-value" id="speed-info">0</span><span class="cp-text-dim" style="color:var(--cp-text-dim)">%</span></div>
+        <div class="cp-row"><span class="cp-label">Двигатель</span><span class="cp-value cp-green" id="engine-status">СТОП</span></div>
+        <div class="cp-divider"></div>
+        <div class="cp-row" id="distance-info"></div>
       </div>
-      <div id="target-panel">
-        <div style="margin-bottom:8px; text-decoration:underline;">ЦЕЛИ</div>
+
+      <!-- ═══ ЦЕЛИ / ЛОГИ (top-right) ═══ -->
+      <div id="target-panel" class="cp-panel">
+        <div class="cp-header">Цели</div>
         <div id="targets-list"></div>
       </div>
-      <canvas id="minimap" width="220" height="220"></canvas>
-      <div id="mode-label">НАБЛЮДЕНИЕ [Tab — прицел] [WASD — движение]</div>
+
+      <!-- ═══ ПОГОДА (bottom-left) ═══ -->
+      <div id="weather-panel" class="cp-panel">
+        <div class="cp-header">Погода</div>
+        <div class="cp-row"><span class="cp-label">Ветер</span><span class="cp-value" id="wind-info">2 м/с &larr;</span></div>
+        <div class="cp-row"><span class="cp-label">Влажность</span><span class="cp-value" id="humidity-info">70%</span></div>
+        <div class="cp-row"><span class="cp-label">Видимость</span><span class="cp-value" id="visibility-info">900м</span></div>
+      </div>
+
+      <!-- ═══ МИНИКАРТА (bottom-right) ═══ -->
+      <div id="minimap-wrapper" class="cp-panel">
+        <canvas id="minimap" width="260" height="260"></canvas>
+      </div>
+
+      <!-- ═══ ОТЛАДКА (top-center) ═══ -->
+      <div id="debug-panel" class="cp-panel">
+        <div class="cp-header">Отладка</div>
+        <div class="dbg-row">
+          <span class="cp-label">Ветер м/с</span>
+          <input type="range" class="cp-slider" id="dbg-wind-speed" min="0" max="20" step="0.1" value="2">
+          <span class="cp-value" id="dbg-wind-speed-val">2.0</span>
+        </div>
+        <div class="dbg-row">
+          <span class="cp-label">Напр. ветра</span>
+          <input type="range" class="cp-slider" id="dbg-wind-dir" min="0" max="360" step="1" value="180">
+          <span class="cp-value" id="dbg-wind-dir-val">180&deg;</span>
+        </div>
+        <div class="dbg-row">
+          <span class="cp-label">Влажн. %</span>
+          <input type="range" class="cp-slider" id="dbg-humidity" min="0" max="100" step="1" value="70">
+          <span class="cp-value" id="dbg-humidity-val">70%</span>
+        </div>
+        <div class="dbg-row">
+          <span class="cp-label">Туман дальн.</span>
+          <input type="range" class="cp-slider" id="dbg-fog" min="100" max="2000" step="10" value="900">
+          <span class="cp-value" id="dbg-fog-val">900</span>
+        </div>
+      </div>
+
+      <!-- Режим -->
+      <div id="mode-label">[ НАБЛЮДЕНИЕ ] Tab:арт-режим &middot; WASD:движение &middot; Пробел:ОГОНЬ</div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

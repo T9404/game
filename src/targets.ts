@@ -9,6 +9,10 @@ export interface TargetData {
   direction: THREE.Vector3; // направление движения
   marked: boolean;        // отмечена ли на карте
   destroyed: boolean;
+  // Маршрут по точкам
+  waypoints?: THREE.Vector3[];
+  waypointIdx?: number;
+  heading?: number;       // текущий курс (рад)
 }
 
 function createTank(color: number, variant: 'light' | 'medium' | 'heavy'): THREE.Group {
@@ -215,51 +219,54 @@ function createTargetMesh(color: number, type: 'btr' | 'sau' | 'bunker'): THREE.
 }
 
 export function createTargets(): TargetData[] {
-  // Масштаб: 1 unit = 1 м (но расстояния в км, поэтому *1000)
-  // Для отображения используем масштаб: 1 unit = 100м (иначе сцена огромная)
-  const SCALE = 100; // 1 unit сцены = 100 метров
-
   const targets: TargetData[] = [];
 
-  // Цель 1: подвижная, 20км, 20 км/ч
+  // Цель 1: подвижная, 20км — едет по квадрату
   const t1 = createTargetMesh(0x8B4513, 'btr');
-  const dist1 = 20000 / SCALE; // 200 units
-  t1.position.set(30, 0, dist1);
+  const cx = 30, cz = 195, half = 15; // центр ~20км, сторона 3км
+  const wp = [
+    new THREE.Vector3(cx + half, 0, cz + half),
+    new THREE.Vector3(cx - half, 0, cz + half),
+    new THREE.Vector3(cx - half, 0, cz - half),
+    new THREE.Vector3(cx + half, 0, cz - half),
+  ];
+  t1.position.set(wp[0].x, 0, wp[0].z);
   targets.push({
     id: 1,
-    name: 'Лёгкий танк (подвижн.)',
+    name: 'БТР (подвижн.)',
     mesh: t1,
     distance: 20000,
-    speed: 20 * 1000 / 3600, // 20 км/ч -> м/с
-    direction: new THREE.Vector3(1, 0, 0).normalize(),
+    speed: 20 * 1000 / 3600,
+    direction: new THREE.Vector3(0, 0, 0),
     marked: false,
     destroyed: false,
+    waypoints: wp,
+    waypointIdx: 1,
+    heading: 0,
   });
 
-  // Цель 2: подвижная, 50км
-  const t2 = createTargetMesh(0x6B6B3A, 'sau');
-  const dist2 = 50000 / SCALE;
-  t2.position.set(-50, 0, dist2);
+  // Цель 2: неподвижная, 30км
+  const t2 = createTargetMesh(0x5A5A5A, 'bunker');
+  t2.position.set(-100, 0, 280); // ~30км
   targets.push({
     id: 2,
-    name: 'Тяжёлый танк (подвижн.)',
+    name: 'Бункер (неподвижн.)',
     mesh: t2,
-    distance: 50000,
-    speed: 15 * 1000 / 3600, // ~15 км/ч
-    direction: new THREE.Vector3(-1, 0, 0.3).normalize(),
+    distance: 30000,
+    speed: 0,
+    direction: new THREE.Vector3(0, 0, 0),
     marked: false,
     destroyed: false,
   });
 
-  // Цель 3: неподвижная, 30км
-  const t3 = createTargetMesh(0x5A5A5A, 'bunker');
-  const dist3 = 30000 / SCALE;
-  t3.position.set(-10, 0, dist3);
+  // Цель 3: неподвижная, 50км
+  const t3 = createTargetMesh(0x6B6B3A, 'sau');
+  t3.position.set(200, 0, 460); // ~50км
   targets.push({
     id: 3,
-    name: 'Средний танк (неподвижн.)',
+    name: 'САУ (неподвижн.)',
     mesh: t3,
-    distance: 30000,
+    distance: 50000,
     speed: 0,
     direction: new THREE.Vector3(0, 0, 0),
     marked: false,
@@ -276,11 +283,46 @@ export function updateTargets(
   for (const t of targets) {
     if (t.destroyed) continue;
 
-    // Двигаем цель (только если есть скорость)
-    if (t.speed > 0) {
+    if (t.waypoints && t.waypointIdx != null && t.heading != null) {
+      const wp = t.waypoints[t.waypointIdx];
+      const dx = wp.x - t.mesh.position.x;
+      const dz = wp.z - t.mesh.position.z;
+      const distToWp = Math.sqrt(dx * dx + dz * dz);
+
+      // Целевой курс к следующей точке
+      const targetHeading = Math.atan2(dx, dz);
+
+      // Плавный поворот (как танк — на месте или в движении)
+      let angleDiff = targetHeading - t.heading;
+      while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+      while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+      const turnRate = 1.5; // рад/с
+      const maxTurn = turnRate * dt;
+      t.heading += Math.max(-maxTurn, Math.min(maxTurn, angleDiff));
+
+      // Едем вперёд только если смотрим примерно в нужную сторону
+      const moveSpeed = (t.speed / scale) * 30; // ускорение для игрового масштаба
+      if (Math.abs(angleDiff) < 0.3) {
+        t.mesh.position.x += Math.sin(t.heading) * moveSpeed * dt;
+        t.mesh.position.z += Math.cos(t.heading) * moveSpeed * dt;
+      }
+
+      // Достигли точки — следующая
+      if (distToWp < 2) {
+        t.waypointIdx = (t.waypointIdx + 1) % t.waypoints.length;
+      }
+
+      t.mesh.rotation.y = t.heading + Math.PI;
+
+      // Обновляем distance от игрока
+      const ddx = t.mesh.position.x * scale, ddz = t.mesh.position.z * scale;
+      t.distance = Math.sqrt(ddx * ddx + ddz * ddz);
+    } else if (t.speed > 0) {
+      // Линейное движение
       t.mesh.position.x += (t.direction.x * t.speed * dt) / scale;
       t.mesh.position.z += (t.direction.z * t.speed * dt) / scale;
     }
+
     // Ставим на рельеф
     if (getHeight) {
       t.mesh.position.y = getHeight(t.mesh.position.x, t.mesh.position.z);

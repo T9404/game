@@ -6,7 +6,7 @@ export class GameCamera {
   private elevation = 0.1;
   private distance = 20;
   private target = new THREE.Vector3(0, 3, 0);
-  private targetYOffset = 3;
+  private targetYOffset = 6;
   private aiming = false;
   // Управление мышью
   private isDragging = false;
@@ -14,7 +14,9 @@ export class GameCamera {
   private lastMouseY = 0;
   // Вид сверху (арт-режим)
   private aimPoint = new THREE.Vector3();
+  private aimPointSmooth = new THREE.Vector3();
   private topDownHeight = 200;
+  private topDownHeightSmooth = 200;
   private vehiclePos = new THREE.Vector3();
   private getTerrainH: ((x: number, z: number) => number) | null = null;
 
@@ -61,11 +63,14 @@ export class GameCamera {
         0,
         this.vehiclePos.z + Math.cos(prevAz) * 50
       );
+      this.aimPointSmooth.copy(this.aimPoint);
       this.topDownHeight = 200;
+      this.topDownHeightSmooth = 200;
     } else {
       this.distance = 20;
-      this.targetYOffset = 3;
+      this.targetYOffset = 6;
     }
+    if (v) this.exitPointerLock();
   }
 
   setTarget(pos: THREE.Vector3): void {
@@ -78,6 +83,13 @@ export class GameCamera {
   }
 
   bindEvents(canvas: HTMLCanvasElement): void {
+    // Pointer lock для WoT-style управления
+    canvas.addEventListener('click', () => {
+      if (!this.aiming && !document.pointerLockElement) {
+        canvas.requestPointerLock();
+      }
+    });
+
     canvas.addEventListener('mousedown', (e) => {
       this.isDragging = true;
       this.lastMouseX = e.clientX;
@@ -87,21 +99,22 @@ export class GameCamera {
     window.addEventListener('mouseup', () => { this.isDragging = false; });
 
     window.addEventListener('mousemove', (e) => {
-      if (!this.isDragging) return;
-      const dx = e.clientX - this.lastMouseX;
-      const dy = e.clientY - this.lastMouseY;
-      this.lastMouseX = e.clientX;
-      this.lastMouseY = e.clientY;
-
       if (this.aiming) {
-        // Арт-режим: двигаем точку прицеливания по земле
+        // Арт-режим: drag для перемещения прицела
+        if (!this.isDragging) return;
+        const dx = e.clientX - this.lastMouseX;
+        const dy = e.clientY - this.lastMouseY;
+        this.lastMouseX = e.clientX;
+        this.lastMouseY = e.clientY;
         const panSpeed = this.topDownHeight * 0.003;
         this.aimPoint.x += dx * panSpeed;
         this.aimPoint.z -= dy * panSpeed;
       } else {
-        // Обычный режим: орбита
-        this.azimuth -= dx * 0.005;
-        this.elevation += dy * 0.005;
+        // WoT-style: мышь управляет камерой без drag
+        const mx = e.movementX || 0;
+        const my = e.movementY || 0;
+        this.azimuth -= mx * 0.003;
+        this.elevation += my * 0.003;
         this.elevation = THREE.MathUtils.clamp(this.elevation, 0.05, Math.PI / 2 - 0.05);
       }
     });
@@ -113,6 +126,12 @@ export class GameCamera {
     });
   }
 
+  exitPointerLock(): void {
+    if (document.pointerLockElement) {
+      document.exitPointerLock();
+    }
+  }
+
   /** Scroll для высоты в арт-режиме (вызывается из main.ts capture listener) */
   adjustTopDownHeight(delta: number): void {
     this.topDownHeight += delta * 0.3;
@@ -121,14 +140,19 @@ export class GameCamera {
 
   private updatePosition(): void {
     if (this.aiming) {
+      // Плавная интерполяция к целевой позиции
+      const smoothing = 0.12;
+      this.aimPointSmooth.lerp(this.aimPoint, smoothing);
+      this.topDownHeightSmooth += (this.topDownHeight - this.topDownHeightSmooth) * smoothing;
+
       // Арт-режим: камера строго вниз, без lookAt (избегаем gimbal lock)
       const groundY = this.getTerrainH
-        ? this.getTerrainH(this.aimPoint.x, this.aimPoint.z)
+        ? this.getTerrainH(this.aimPointSmooth.x, this.aimPointSmooth.z)
         : 0;
       this.camera.position.set(
-        this.aimPoint.x,
-        groundY + this.topDownHeight,
-        this.aimPoint.z
+        this.aimPointSmooth.x,
+        groundY + this.topDownHeightSmooth,
+        this.aimPointSmooth.z
       );
       // Вручную ставим ориентацию: смотрим вниз, +Z = верх экрана
       this.camera.rotation.set(-Math.PI / 2, 0, 0);
